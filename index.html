@@ -7,13 +7,13 @@
 <meta name="theme-color" content="#1E3A2F">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Tabmate">
+<meta name="apple-mobile-web-app-title" content="TabMate">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
-<title>Tabmate</title>
+<title>TabMate</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500;1,9..144,600&family=DM+Sans:wght@400;500;600;700&display=swap">
 <style>
@@ -149,7 +149,7 @@ input:focus-visible,textarea:focus-visible,button:focus-visible,select:focus-vis
     <header>
       <div class="brand">
         <svg width="30" height="30" viewBox="0 0 240 240" aria-hidden="true"><path d="M68 36 H172 V188 L159 202 L146 188 L133 202 L120 188 L107 202 L94 188 L81 202 L68 188 Z" fill="#F6EEDC"></path><rect x="86" y="62" width="68" height="14" rx="7" fill="#CDBFA6"></rect><circle cx="87" cy="148" r="13" fill="#9DB8E0"></circle><circle cx="109" cy="148" r="13" fill="#E9A0B0"></circle><circle cx="131" cy="148" r="13" fill="#9FCBAA"></circle><circle cx="153" cy="148" r="13" fill="#EDBE7E"></circle></svg>
-        <h1>Tabmate</h1>
+        <h1>TabMate</h1>
       </div>
       <div class="hdr"><button class="reset strong" id="histBtn" type="button">History</button><button class="reset" id="resetBtn" type="button">New split</button></div>
     </header>
@@ -591,7 +591,7 @@ function rPass(){
 }
 
 function venmoLink(p,cents){
-  const note=encodeURIComponent("Dinner split via Tabmate");
+  const note=encodeURIComponent("Dinner split via TabMate");
   return `https://venmo.com/?txn=charge&audience=private&recipients=${encodeURIComponent(p.venmo)}&amount=${(cents/100).toFixed(2)}&note=${note}`;
 }
 function rSettle(){

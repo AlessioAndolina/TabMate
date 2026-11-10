@@ -1,16 +1,16 @@
 <p align="center">
-  <img src="icon-192.png" width="96" alt="Tabmate logo: a receipt with four colored dots">
+  <img src="icon-192.png" width="96" alt="TabMate logo: a receipt with four colored dots">
 </p>
 
-<h1 align="center">Tabmate</h1>
+<h1 align="center">TabMate</h1>
 
 <p align="center">
   <b>Split the check by passing one phone around the table.</b><br>
-  Everyone taps what they had. Tabmate does the tax, the tip and the Venmo requests.
+  Everyone taps what they had. TabMate does the tax, the tip and the Venmo requests.
 </p>
 
 <p align="center">
-  <a href="https://AlessioAndolina.github.io/tabmate/"><b>Open Tabmate</b></a>
+  <a href="https://alessioandolina.github.io/TabMate/"><b>Open TabMate</b></a>
 </p>
 
 <p align="center">
@@ -23,11 +23,11 @@
 
 ## Why
 
-The check comes, someone pays, and then the math begins. Tabmate turns that into a quick game of pass the phone. Only the person who paid needs it. Nobody else downloads anything or makes an account.
+The check comes, someone pays, and then the math begins. TabMate turns that into a quick game of pass the phone. Only the person who paid needs it. Nobody else downloads anything or makes an account.
 
 ## How it works
 
-1. **Paste the receipt.** When the card reader texts you a receipt, copy the text and paste it in. Tabmate reads every item, plus tax and any discounts. Three margaritas become three separate items, so each person can claim their own.
+1. **Paste the receipt.** When the card reader texts you a receipt, copy the text and paste it in. TabMate reads every item, plus tax and any discounts. Three margaritas become three separate items, so each person can claim their own.
 2. **Set up the table.** Add everyone now, or let each person type their own name and Venmo when the phone reaches them.
 3. **Pass the phone.** Each person taps what they ordered. Shared the guac? Tap **Split** to pick who shared it, or give it to the whole table. Forgot something? Tap your name at the top to jump back to your turn.
 4. **Settle up.** Tax and tip are split in proportion to what each person ordered, rounded so everyone's share adds up to the exact bill. Tap **Request on Venmo** for each person, or copy a summary for the group chat.
@@ -47,11 +47,11 @@ The check comes, someone pays, and then the math begins. Tabmate turns that into
 - **iPhone:** open the link in Safari, tap Share, then **Add to Home Screen**.
 - **Android:** open the link in Chrome, tap the menu, then **Add to Home screen**.
 
-It gets the Tabmate icon and opens full screen, like an app.
+It gets the TabMate icon and opens full screen, like an app.
 
 ## Privacy
 
-Everything stays on your phone. Receipts, names and History are saved in your browser and never sent anywhere. Tabmate never touches money: the Venmo buttons open Venmo with the request filled in, and you send it from there.
+Everything stays on your phone. Receipts, names and History are saved in your browser and never sent anywhere. TabMate never touches money: the Venmo buttons open Venmo with the request filled in, and you send it from there.
 
 ## Built with
 

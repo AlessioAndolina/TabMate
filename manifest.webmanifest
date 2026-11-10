@@ -1,6 +1,6 @@
 {
-  "name": "Tabmate",
-  "short_name": "Tabmate",
+  "name": "TabMate",
+  "short_name": "TabMate",
   "description": "Split a group dinner bill item by item.",
   "start_url": "./",
   "scope": "./",
