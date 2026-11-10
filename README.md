@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://YOUR-USERNAME.github.io/tabmate/"><b>Open Tabmate</b></a>
+  <a href="https://AlessioAndolina.github.io/tabmate/"><b>Open Tabmate</b></a>
 </p>
 
 <p align="center">
