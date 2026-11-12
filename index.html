@@ -266,28 +266,80 @@ Rules:
 - One line per ordered item: quantity first only if more than 1, then the item name, then that line's total price with two decimals at the very end. Example: "2 IPA Draft 16.00"
 - Leave out modifiers or notes that have no price of their own.
 - Show discounts or comps as a line with a negative price, like "Happy hour discount -5.00".
-- After the items add "Subtotal X", "Tax X", "Tip X" (only if a tip is printed) and "Total X" when they appear.
+- After the items add "Subtotal X", "Tax X" and "Total X" when they appear.
+- Write any auto gratuity, service charge or printed tip as "Gratuity X". Skip suggested tip amounts.
+- Write any credit card surcharge or card processing fee as "Surcharge X".
 - Start with the restaurant's name on its own line, if it is printed.
 - Skip the address, server name, card details and any other text.
 Reply with only the receipt lines, no other words.`;
 function getSampler(){if(!samplerP){samplerP=(window.claude&&claude.use?claude.use("sample"):Promise.resolve(null)).catch(()=>null)}return samplerP}
 const ocrErr=c=>({not_granted:"Photo reading needs permission to use Claude. You can still paste the text.",sampling_disabled:"Photo reading is not available on this account. You can still paste the text.",rate_limited:"Too many tries right now. Wait a minute and try again.",image_rejected:"That photo could not be read. Try a sharper, well lit photo of just the receipt.",refused:"No receipt found in that photo. Try another shot.",empty_completion:"No receipt found in that photo. Try another shot.",session_expired:"Sign in to Claude again, then retry."})[c]||"Something went wrong reading the photo. Try again.";
+/* on-phone photo reader (used when Claude isn't available, like the GitHub version) */
+const TESS_URL="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+let tessP=null;
+function loadTess(){if(!tessP)tessP=new Promise((res,rej)=>{if(window.Tesseract)return res(window.Tesseract);const sc=document.createElement("script");sc.src=TESS_URL;sc.onload=()=>window.Tesseract?res(window.Tesseract):rej(new Error("load"));sc.onerror=()=>{tessP=null;rej(new Error("load"))};document.head.appendChild(sc)});return tessP}
+async function prepPhoto(file){
+  const url=URL.createObjectURL(file);
+  try{
+    const img=await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=url});
+    const scale=Math.min(2.5,1800/Math.max(img.width,img.height));
+    const c=document.createElement("canvas");c.width=Math.round(img.width*scale);c.height=Math.round(img.height*scale);
+    const ctx=c.getContext("2d");ctx.drawImage(img,0,0,c.width,c.height);
+    const d=ctx.getImageData(0,0,c.width,c.height),px=d.data;
+    const hist=new Array(256).fill(0);
+    for(let i=0;i<px.length;i+=4){const l=Math.round(.299*px[i]+.587*px[i+1]+.114*px[i+2]);px[i]=l;hist[l]++}
+    const n=px.length/4;let lo=0,hi=255,acc=0;
+    for(let v=0;v<256;v++){acc+=hist[v];if(acc>n*.02){lo=v;break}}
+    acc=0;for(let v=255;v>=0;v--){acc+=hist[v];if(acc>n*.02){hi=v;break}}
+    const span=Math.max(1,hi-lo);
+    for(let i=0;i<px.length;i+=4){let v=(px[i]-lo)*255/span;v=v<0?0:v>255?255:v;px[i]=px[i+1]=px[i+2]=v}
+    ctx.putImageData(d,0,0);return c;
+  }finally{URL.revokeObjectURL(url)}
+}
+function cleanOCR(text){
+  return String(text).split(/\r?\n/).map(l=>{
+    let t=l.replace(/[|_~`]/g," ").replace(/\s+/g," ").trim();
+    t=t.replace(/(\d)\s?,\s?(\d{2})$/,"$1.$2");
+    t=t.replace(/(\s\$?\d{1,4}) (\d{2})$/,"$1.$2");
+    t=t.replace(/(^|\s)[S§\$]\s?(\d{1,4}[.,]\d{2})$/,"$1$2");
+    t=t.replace(/(\d{1,4})[.,]([0-9OoDQ]{2})$/,(m,a,b)=>a+"."+b.replace(/[OoDQ]/g,"0"));
+    t=t.replace(/\b0(?=[A-Za-z]{2})/g,"O").replace(/([A-Za-z])0(?=[A-Za-z])/g,"$1o").replace(/([A-Za-z])1(?=[A-Za-z])/g,"$1l");
+    return t;
+  }).filter(Boolean).join("\n");
+}
+async function localOCR(file,onStep){
+  onStep("Getting the photo reader ready...");
+  const T=await loadTess();
+  const c=await prepPhoto(file);
+  const w=await T.createWorker("eng",1,{logger:m=>{if(m.status==="recognizing text")onStep(`Reading the receipt... ${Math.round((m.progress||0)*100)}%`)}});
+  try{
+    await w.setParameters({tessedit_pageseg_mode:"6",preserve_interword_spaces:"1"});
+    const {data}=await w.recognize(c);
+    return cleanOCR(data.text);
+  }finally{w.terminate()}
+}
 async function setupPhoto(){
   const box=$("#photoBox");if(!box)return;
-  const s=await getSampler();if(!s||!box.isConnected)return;
-  const lim=await s.limits().catch(()=>null);if(!lim||!lim.images||!box.isConnected)return;
+  let reader=null;
+  const s=await getSampler();
+  if(s){const lim=await s.limits().catch(()=>null);if(lim&&lim.images)reader={kind:"claude",s,lim}}
+  if(!reader&&!window.claude)reader={kind:"local"};
+  if(!reader||!box.isConnected)return;
   box.hidden=false;
-  const inp=$("#photo");if(lim.images.mediaTypes)inp.accept=lim.images.mediaTypes.join(",");
+  const inp=$("#photo"),msg=$("#photoMsg"),btn=$("#photoBtn");
+  if(!photoNote.text)msg.textContent=reader.kind==="claude"?"Claude reads the photo and types out the receipt for you.":"Reads the photo right on your phone. Lay the receipt flat in good light, and check the text after.";
+  if(reader.kind==="claude"&&reader.lim.images.mediaTypes)inp.accept=reader.lim.images.mediaTypes.join(",");
   inp.onchange=async e=>{
     const f=e.target.files&&e.target.files[0];if(!f)return;
-    const msg=$("#photoMsg"),btn=$("#photoBtn");
-    msg.className="";msg.style.color="var(--muted)";msg.textContent="Reading the receipt. This can take 10 to 30 seconds...";btn.style.opacity=".5";btn.style.pointerEvents="none";
+    msg.className="";msg.style.color="var(--muted)";btn.style.opacity=".5";btn.style.pointerEvents="none";
     try{
-      const {text}=await s(OCR_PROMPT,{images:[f]});
-      S.raw=text.replace(/^```[a-z]*\n?|```$/g,"").trim();S.example=false;save();
-      photoNote={text:"Done. Check the text below for mistakes, then tap Read receipt.",ok:true};render();
+      let text;
+      if(reader.kind==="claude"){msg.textContent="Reading the receipt. This can take 10 to 30 seconds...";text=(await reader.s(OCR_PROMPT,{images:[f]})).text.replace(/^```[a-z]*\n?|```$/g,"").trim()}
+      else{text=await localOCR(f,t=>{msg.textContent=t});if(!/\d\.\d{2}/.test(text))throw{code:"empty_completion"}}
+      S.raw=text;S.example=false;save();
+      photoNote={text:reader.kind==="claude"?"Done. Check the text below for mistakes, then tap Read receipt.":"Done. The photo reader can misread small print, so check the prices below, then tap Read receipt.",ok:true};render();
     }catch(err){
-      photoNote={text:ocrErr(err&&err.code),ok:false};
+      photoNote={text:reader.kind==="claude"?ocrErr(err&&err.code):(err&&err.code==="empty_completion"?"Couldn't find any prices in that photo. Try a closer, flatter, well lit shot of just the receipt.":"Couldn't load the photo reader. Check your connection, or paste the receipt text instead."),ok:false};
       msg.style.color="var(--warn)";msg.textContent=photoNote.text;btn.style.opacity="";btn.style.pointerEvents="";
     }
     e.target.value="";
@@ -296,19 +348,28 @@ async function setupPhoto(){
 
 /* ---------- parser ---------- */
 function parse(text){
-  const out={items:[],tax:0,tip:0,discount:0,subtotal:null,total:null};
+  const out={items:[],tax:0,tip:0,surcharge:0,discount:0,subtotal:null,total:null};
   const moneyRe=/(-?\(?\$?\s?-?\d{1,4}(?:,\d{3})*\.\d{2}\)?)\s*$/;
+  const onlyMoney=/^-?\(?\$?\s?-?\d{1,4}(?:,\d{3})*\.\d{2}\)?$/;
+  const TIP=/\btips?\b|gratuity|\bgrat\b|auto[\s-]*grat|service\s*(charge|chg)|\bsvc\s*(charge|chg)?\b|\bsrv\s*chg/;
+  const SUR=/surcharge|sur-charge|card\s*fee|credit\s*(card\s*)?fee|\bcc\s*fee|processing\s*fee|convenience\s*fee|non-?cash\s*(adj|fee|charge)/;
+  let pending=null;
   for(let raw of text.split(/\r?\n/)){
-    let line=raw.replace(/\t/g," ").trim(); if(!line) continue;
-    const m=line.match(moneyRe); if(!m) continue;
+    let line=raw.replace(/\t/g," ").trim(); if(!line){pending=null;continue}
+    if(pending&&onlyMoney.test(line))line=pending+" "+line;
+    const m=line.match(moneyRe);
+    if(!m){pending=line.length<=40?line:null;continue}
+    pending=null;
     let amt=toC(m[1].replace(/[()]/g,"")); if(/^\(|-/.test(m[1].trim())) amt=-Math.abs(amt);
     let name=line.slice(0,m.index).replace(/[\s.:$-]+$/,"").trim();
     const low=name.toLowerCase();
+    if(/suggest|tip guide|tip calc/.test(low))continue;
     if(/sub\s*-?total/.test(low)){out.subtotal=amt;continue}
     if(/\btax\b|\bhst\b|\bgst\b|\bvat\b/.test(low)){out.tax+=amt;continue}
-    if(/\btip\b|gratuity|service charge/.test(low)){out.tip+=amt;continue}
+    if(TIP.test(low)&&!/total/.test(low)){out.tip+=amt;continue}
+    if(SUR.test(low)){out.surcharge+=amt;continue}
     if(/discount|promo|coupon|\bcomp\b/.test(low)){out.discount+=Math.abs(amt);continue}
-    if(/\btotal\b|balance|amount due|visa|mastercard|amex|card|cash|change|paid|approved/.test(low)){if(/total/.test(low))out.total=amt;continue}
+    if(/\btotal\b|balance|amount due|visa|mastercard|amex|discover|card|cash|change|paid|approved|auth/.test(low)){if(/total|amount due|balance/.test(low))out.total=amt;continue}
     if(!name) continue;
     let qty=1,unit=null;
     let q=name.match(/^(\d{1,2})\s*(?:x|×|@)?\s+(.+)$/i);
@@ -329,7 +390,7 @@ function parse(text){
 /* ---------- math ---------- */
 function subtotal(){return S.items.reduce((a,i)=>a+i.price,0)}
 function tipCents(){if(S.tipMode==="pct")return Math.round(subtotal()*S.tipPct/100);return S.tip}
-function grand(){return subtotal()-S.discount+S.tax+tipCents()}
+function grand(){return subtotal()-S.discount+S.tax+tipCents()+(S.surcharge||0)}
 function shares(){
   const res={};S.people.forEach(p=>res[p.id]={items:[],sub:0});
   const unclaimed=[];
@@ -340,13 +401,16 @@ function shares(){
   }
   const claimedSub=Object.values(res).reduce((a,r)=>a+r.sub,0);
   const total=grand(), sub=subtotal()||1;
-  const extra=(total-sub);
+  const sur=S.surcharge||0;
+  const extra=(total-sur-sub);
   const ids=Object.keys(res);
   ids.forEach(id=>res[id].exact=res[id].sub*(1+extra/sub));
   const target=Math.round(claimedSub*(1+extra/sub));
   let floors=ids.map(id=>({id,f:Math.floor(res[id].exact),r:res[id].exact-Math.floor(res[id].exact)}));
   let left=target-floors.reduce((a,x)=>a+x.f,0);
   floors.sort((a,b)=>b.r-a.r).forEach(x=>{res[x.id].due=x.f+(left-->0?1:0)});
+  const base=ids.length?Math.floor(sur/ids.length):0;let rem=sur-base*ids.length;
+  ids.forEach(id=>{res[id].fee=ids.length?base+(rem-->0?1:0):0;res[id].due+=res[id].fee});
   return{res,unclaimed,claimedSub};
 }
 
@@ -372,11 +436,11 @@ function rReceipt(){
   const app=$("#app");
   if(!S.parsed){
     app.innerHTML=`<h2>Paste the texted receipt</h2>
-    <p class="sub">Paste the receipt text from the card reader. Quantities like "3 Margarita" get split into 3 separate taps.</p>
+    <p class="sub">Paste the receipt text from the card reader, or take a photo of a paper receipt. Quantities like "3 Margarita" get split into 3 separate taps.</p>
     <div id="photoBox" class="photo" hidden>
       <label class="btn ghost" for="photo" id="photoBtn">Photo of receipt</label>
       <input type="file" id="photo" accept="image/*" capture="environment" hidden>
-      <small id="photoMsg" class="${photoNote.ok?'ok':''}" style="color:${photoNote.ok?'':'var(--muted)'}">${esc(photoNote.text||'Claude reads the photo and types out the receipt for you.')}</small>
+      <small id="photoMsg" class="${photoNote.ok?'ok':''}" style="color:${photoNote.ok?'':'var(--muted)'}">${esc(photoNote.text)}</small>
     </div>
     <label class="label" for="raw">Receipt text ${S.example?'<span class="pill">Example loaded</span>':''}</label>
     <textarea id="raw" spellcheck="false">${esc(S.raw)}</textarea>
@@ -391,7 +455,8 @@ function rReceipt(){
       const p=parse(S.raw);
       if(!p.items.length){app.insertAdjacentHTML("beforeend",`<p class="alert" style="margin-top:12px">No priced lines found. Each item needs a price at the end of its line, like "Burger 14.00".</p>`);return}
       S.items=p.items;S.tax=p.tax;S.discount=p.discount;S.claims={};
-      if(p.tip>0){S.tipMode="amt";S.tip=p.tip}else{S.tipMode="pct"}
+      S.surcharge=p.surcharge;S.surchargeOnReceipt=p.surcharge>0;S.tipFromReceipt=p.tip>0;
+      if(p.tip>0){S.tipMode="amt";S.tip=p.tip}else{S.tipMode="pct";S.tip=0}
       S.parsed=true;S.parseCheck=p;S.sid=Date.now().toString(36);S.createdAt=Date.now();lastSaved="";save();render();
     };
     return;
@@ -415,12 +480,15 @@ function rReceipt(){
       <div class="seg" id="tipSeg">${[18,20,22,25].map(v=>`<button type="button" data-pct="${v}" aria-pressed="${S.tipMode==="pct"&&S.tipPct===v}">${v}%</button>`).join("")}
       <button type="button" data-amt="1" aria-pressed="${S.tipMode==="amt"}">$ Amount</button></div>
       <div id="tipAmtWrap" ${S.tipMode==="amt"?"":"hidden"} style="margin-top:8px"><input type="text" inputmode="decimal" id="tipAmt" value="${(S.tip/100).toFixed(2)}" aria-label="Tip amount"></div>
-      <small style="color:var(--muted)">Percent tips are figured on the pre-tax subtotal.</small>
+      ${S.tipFromReceipt&&S.tipMode==="amt"?`<p class="ok" style="margin:8px 0 0">Auto gratuity of ${money(p.tip||S.tip)} is on the receipt, so it's set as the tip. Don't add another tip on top.</p>`:`<small style="color:var(--muted)">Percent tips are figured on the pre-tax subtotal.</small>`}
     </div>
     <div class="row" style="flex-wrap:nowrap">
       <div style="flex:1"><label class="label" for="tax">Tax</label><input type="text" inputmode="decimal" id="tax" value="${(S.tax/100).toFixed(2)}"></div>
       <div style="flex:1"><label class="label" for="disc">Discount</label><input type="text" inputmode="decimal" id="disc" value="${(S.discount/100).toFixed(2)}"></div>
     </div>
+    ${S.surchargeOnReceipt?`<div><label class="label" for="sur">Card surcharge</label><input type="text" inputmode="decimal" id="sur" value="${((S.surcharge||0)/100).toFixed(2)}">
+      <small style="color:var(--muted)">From the receipt. Split evenly across everyone at the table.</small></div>`:""}
+    <div id="totchk"></div>
     <div class="totals" id="tot"></div>
   </div>
   <div class="row" style="margin-top:18px;justify-content:space-between">
@@ -430,8 +498,11 @@ function rReceipt(){
   const tot=()=>{$("#tot").innerHTML=`<div><span>Subtotal</span><span>${money(subtotal())}</span></div>
     ${S.discount?`<div><span>Discount</span><span>-${money(S.discount)}</span></div>`:""}
     <div><span>Tax</span><span>${money(S.tax)}</span></div>
-    <div><span>Tip${S.tipMode==="pct"?" ("+S.tipPct+"%)":""}</span><span>${money(tipCents())}</span></div>
-    <div class="big"><span>Total</span><span>${money(grand())}</span></div>`};
+    <div><span>${S.tipFromReceipt&&S.tipMode==="amt"?"Auto gratuity":"Tip"+(S.tipMode==="pct"?" ("+S.tipPct+"%)":"")}</span><span>${money(tipCents())}</span></div>
+    ${S.surcharge?`<div><span>Card surcharge</span><span>${money(S.surcharge)}</span></div>`:""}
+    <div class="big"><span>Total</span><span>${money(grand())}</span></div>`;
+    const own=S.tipFromReceipt&&S.tipMode==="amt"?0:tipCents();const before=grand()-own;
+    const tc=$("#totchk");if(tc)tc.innerHTML=p.total!=null&&p.total>0?(p.total===before?`<p class="ok" style="margin:0">Matches the receipt total of ${money(p.total)}${own?", plus your tip":""}.</p>`:`<p class="alert" style="margin:0">${own?"Before your tip, this":"This"} adds up to ${money(before)}, but the receipt total is ${money(p.total)}. A line may have been missed, like a fee or a gratuity.</p>`):""};
   tot();
   $("#lines").addEventListener("input",e=>{
     const row=e.target.closest(".line");if(!row)return;const it=S.items.find(i=>i.id===row.dataset.id);
@@ -449,6 +520,7 @@ function rReceipt(){
   const ta=$("#tipAmt");if(ta)ta.oninput=e=>{S.tip=toC(e.target.value);save();tot()};
   $("#tax").oninput=e=>{S.tax=toC(e.target.value);save();tot()};
   $("#disc").oninput=e=>{S.discount=toC(e.target.value);save();tot()};
+  const sr=$("#sur");if(sr)sr.oninput=e=>{S.surcharge=toC(e.target.value);save();tot()};
   $("#back").onclick=()=>{S.parsed=false;save();render()};
   $("#next").onclick=()=>setStep("table");
 }
@@ -600,7 +672,7 @@ function rSettle(){
   const payer=S.people.find(p=>p.id===S.payer)||S.people[0];
   const owedToPayer=S.people.filter(p=>p.id!==payer.id).reduce((a,p)=>a+(res[p.id].due||0),0);
   app.innerHTML=`<h2>Who owes what</h2>
-  <p class="sub">Tax${S.discount?", discount,":""} and tip are split in proportion to what each person ordered.</p>
+  <p class="sub">Tax${S.discount?", discount,":""} and tip are split in proportion to what each person ordered.${S.surcharge?` The ${money(S.surcharge)} card surcharge is split evenly.`:""}</p>
   ${unclaimed.length?`<div class="alert"><b>${unclaimed.length} unclaimed:</b> ${unclaimed.map(i=>esc(i.name)).join(", ")} (${money(unclaimed.reduce((a,i)=>a+i.price,0))})
     <div class="row" style="margin-top:8px"><button class="btn small" id="splitAll" type="button">Split them across everyone</button>
     <button class="btn ghost small" id="again" type="button">Pass the phone again</button></div></div>`
@@ -610,7 +682,7 @@ function rSettle(){
     return `<div class="card">
       <div class="head"><span class="nm">${av(p)}${esc(p.name)}${isPayer?' <span class="pill">Paid</span>':""}</span>
       <span class="due">${money(r.due||0)}</span></div>
-      <details><summary>${r.items.length} item${r.items.length===1?"":"s"}, food ${money(Math.round(r.sub))}, tax/tip ${money((r.due||0)-Math.round(r.sub))}</summary>
+      <details><summary>${r.items.length} item${r.items.length===1?"":"s"}, food ${money(Math.round(r.sub))}, tax/tip ${money((r.due||0)-Math.round(r.sub)-(r.fee||0))}${r.fee?`, surcharge ${money(r.fee)}`:""}</summary>
         <ul>${r.items.map(i=>`<li>${esc(i.name)}${i.split>1?` ÷${i.split}`:""}: ${money(Math.round(i.amt))}</li>`).join("")}</ul></details>
       ${isPayer?"":(p.venmo?`<a class="btn venmo small" href="${venmoLink(p,r.due||0)}" target="_blank" rel="noopener">Request ${money(r.due||0)} on Venmo</a>`
         :`<small style="color:var(--muted)">Add a Venmo username on the Table step to get a request link.</small>`)}
