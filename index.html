@@ -326,12 +326,14 @@ async function setupPhoto(){
   if(!reader&&!window.claude)reader={kind:"local"};
   if(!reader||!box.isConnected)return;
   box.hidden=false;
-  const inp=$("#photo"),msg=$("#photoMsg"),btn=$("#photoBtn");
-  if(!photoNote.text)msg.textContent=reader.kind==="claude"?"Claude reads the photo and types out the receipt for you.":"Reads the photo right on your phone. Lay the receipt flat in good light, and check the text after.";
-  if(reader.kind==="claude"&&reader.lim.images.mediaTypes)inp.accept=reader.lim.images.mediaTypes.join(",");
-  inp.onchange=async e=>{
+  const inps=[$("#photo"),$("#photoPick")],btns=[$("#photoBtn"),$("#pickBtn")],msg=$("#photoMsg");
+  const busy=on=>btns.forEach(b=>{b.style.opacity=on?".5":"";b.style.pointerEvents=on?"none":""});
+  btns.forEach(b=>{b.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();$("#"+b.htmlFor).click()}}});
+  if(!photoNote.text)msg.textContent=reader.kind==="claude"?"Claude reads the photo and types out the receipt for you. Screenshots of a receipt work too.":"Reads the photo right on your phone. Lay the receipt flat in good light, and check the text after. Screenshots work too.";
+  if(reader.kind==="claude"&&reader.lim.images.mediaTypes)inps.forEach(i=>i.accept=reader.lim.images.mediaTypes.join(","));
+  const onPick=async e=>{
     const f=e.target.files&&e.target.files[0];if(!f)return;
-    msg.className="";msg.style.color="var(--muted)";btn.style.opacity=".5";btn.style.pointerEvents="none";
+    msg.className="";msg.style.color="var(--muted)";busy(true);
     try{
       let text;
       if(reader.kind==="claude"){msg.textContent="Reading the receipt. This can take 10 to 30 seconds...";text=(await reader.s(OCR_PROMPT,{images:[f]})).text.replace(/^```[a-z]*\n?|```$/g,"").trim()}
@@ -340,10 +342,11 @@ async function setupPhoto(){
       photoNote={text:reader.kind==="claude"?"Done. Check the text below for mistakes, then tap Read receipt.":"Done. The photo reader can misread small print, so check the prices below, then tap Read receipt.",ok:true};render();
     }catch(err){
       photoNote={text:reader.kind==="claude"?ocrErr(err&&err.code):(err&&err.code==="empty_completion"?"Couldn't find any prices in that photo. Try a closer, flatter, well lit shot of just the receipt.":"Couldn't load the photo reader. Check your connection, or paste the receipt text instead."),ok:false};
-      msg.style.color="var(--warn)";msg.textContent=photoNote.text;btn.style.opacity="";btn.style.pointerEvents="";
+      msg.style.color="var(--warn)";msg.textContent=photoNote.text;busy(false);
     }
     e.target.value="";
   };
+  inps.forEach(i=>i.onchange=onPick);
 }
 
 /* ---------- parser ---------- */
@@ -438,8 +441,13 @@ function rReceipt(){
     app.innerHTML=`<h2>Paste the texted receipt</h2>
     <p class="sub">Paste the receipt text from the card reader, or take a photo of a paper receipt. Quantities like "3 Margarita" get split into 3 separate taps.</p>
     <div id="photoBox" class="photo" hidden>
-      <label class="btn ghost" for="photo" id="photoBtn">Photo of receipt</label>
+      <span class="label" style="margin:0">Paper receipt?</span>
+      <div class="row">
+        <label class="btn ghost small" for="photo" id="photoBtn" tabindex="0">Take photo</label>
+        <label class="btn ghost small" for="photoPick" id="pickBtn" tabindex="0">Choose photo or file</label>
+      </div>
       <input type="file" id="photo" accept="image/*" capture="environment" hidden>
+      <input type="file" id="photoPick" accept="image/*" hidden>
       <small id="photoMsg" class="${photoNote.ok?'ok':''}" style="color:${photoNote.ok?'':'var(--muted)'}">${esc(photoNote.text)}</small>
     </div>
     <label class="label" for="raw">Receipt text ${S.example?'<span class="pill">Example loaded</span>':''}</label>
