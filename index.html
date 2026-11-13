@@ -265,7 +265,7 @@ const OCR_PROMPT=`This photo is a restaurant or bar receipt. Transcribe it as pl
 Rules:
 - One line per ordered item: quantity first only if more than 1, then the item name, then that line's total price with two decimals at the very end. Example: "2 IPA Draft 16.00"
 - Leave out modifiers or notes that have no price of their own.
-- Show discounts or comps as a line with a negative price, like "Happy hour discount -5.00".
+- Show discounts or comps as a line with a negative price, like "Happy hour discount -5.00", keeping each one exactly where it appears on the receipt (right under its item, or near the subtotal).
 - After the items add "Subtotal X", "Tax X" and "Total X" when they appear.
 - Write any auto gratuity, service charge or printed tip as "Gratuity X". Skip suggested tip amounts.
 - Write any credit card surcharge or card processing fee as "Surcharge X".
@@ -351,14 +351,68 @@ async function setupPhoto(){
 
 /* ---------- parser ---------- */
 function parse(text){
-  const out={items:[],tax:0,tip:0,surcharge:0,discount:0,subtotal:null,total:null};
-  const moneyRe=/(-?\(?\$?\s?-?\d{1,4}(?:,\d{3})*\.\d{2}\)?)\s*$/;
-  const onlyMoney=/^-?\(?\$?\s?-?\d{1,4}(?:,\d{3})*\.\d{2}\)?$/;
+  const out={items:[],skipped:[],notes:[],itemDisc:0,tax:0,tip:0,surcharge:0,discount:0,subtotal:null,total:null};
+  const moneyRe=/(-?\(?-?\$?\s?-?\d{1,4}(?:,\d{3})*\.\d{2}\)?-?)\s*$/;
+  const onlyMoney=/^-?\(?-?\$?\s?-?\d{1,4}(?:,\d{3})*\.\d{2}\)?-?$/;
+  const DISC=/discount|\bdisc\b|\bdsc\b|promo|coupon|\bcomp(ed)?\b|savings|\b\d{1,2}\s*%\s*off\b/;
+  const STOP=new Set(["discount","discounts","disc","dsc","combo","combos","promo","promos","promotion","promotions","coupons","total","off","special","specials","deal","hh","happy","hour","the","and","with","item","items","coupon","comp","comped","savings","save","pct","percent","for","applied","bundle","meal","price"]);
+  let lineNo=0,afterSub=false,summed=0,lastItem=false;const pend=[];
+  const SUMMARY=/^(total\s+)?(discounts|promos|promotions|savings|coupons)(\s+total)?$|^(total\s+discount|discount\s+total)$/;
+  const ALIAS={beer:/^(beers?|lagers?|ales?|ipas?|pils|pilsner|stouts?|porters?|kegs?|drafts?|draughts?|lite|light|gold|pints?|brews?|bud|coors|miller|pbr|hazy|kolsch|amber|wheat|sours?|seltzers?|cans?|bottles?)$/,
+    shot:/^(shots?|whisk(e)?y|tequila|vodka|rum|gin|bourbon|jameson|fireball|well|mezcal|jager|rye|scotch)$/,
+    wine:/^(wines?|cab|cabernet|pinot|merlot|chardonnay|ros[eé]|sauvignon|prosecco|riesling|malbec|glass)$/};
+  const words=n=>String(n).toLowerCase().split(/[^a-z]+/).filter(Boolean);
+  const fix=u=>out.items.filter(x=>x.line===u);
+  const spread=(units,total)=>{const per=Math.floor(total/units.length);let rem=total-per*units.length;units.forEach(x=>{x.price=per+(rem-->0?1:0)})};
+  const lineInfo=()=>{const m=new Map();out.items.forEach(x=>{if(!m.has(x.line))m.set(x.line,{line:x.line,name:x.name,units:0});m.get(x.line).units++});return[...m.values()]};
+  const spreadNote=(label,d)=>out.notes.push(`Couldn't tell which item "${label}" ${money(-d)} was for, so it's split across the whole table.`);
+  const applyDisc=g=>{
+    const lines=lineInfo();const label=g.name||"Discount";
+    if(!lines.length){out.discount+=g.d;return}
+    const toks=words(g.name).filter(w=>w.length>1&&!STOP.has(w));
+    const matched=[];
+    toks.forEach(t=>{
+      let c=lines.filter(l=>!matched.includes(l)&&words(l.name).some(w=>w===t||w+"s"===t||w===t+"s"));
+      if(!c.length){const a=Object.keys(ALIAS).find(a=>a===t||a+"s"===t);if(a)c=lines.filter(l=>!matched.includes(l)&&words(l.name).some(w=>ALIAS[a].test(w)))}
+      if(!c.length)return;
+      const big=c.filter(l=>l.units>=g.k);if(big.length)c=big;
+      c.sort((a,b)=>b.units-a.units||b.line-a.line);matched.push(c[0]);
+    });
+    const comboish=toks.length>=2||/&|\+|\band\b|combo|bundle/i.test(g.name);
+    if(comboish&&matched.length&&matched.length<Math.max(2,toks.length)){
+      const need=Math.max(2,toks.length)-matched.length;const c=lines.filter(l=>!matched.includes(l)&&l.units>=g.k&&g.k>1);
+      if(c.length===need)matched.push(...c);
+    }
+    if(matched.length>=2){
+      matched.sort((a,b)=>a.line-b.line);
+      const groups=matched.map(l=>fix(l.line));
+      const most=Math.min(...groups.map(x=>x.length));
+      const made=g.k>1?Math.min(g.k,most):most;
+      const taken=groups.map(x=>x.slice(-made));const T=taken.flat().reduce((a,x)=>a+x.price,0);
+      const dd=Math.min(g.k>1?Math.round(g.d*made/g.k):g.d,T);if(g.d>dd)out.discount+=g.d-dd;
+      const ids=new Set(taken.flat().map(x=>x.id));const at=out.items.findIndex(x=>ids.has(x.id));out.items=out.items.filter(x=>!ids.has(x.id));
+      const nm=matched.map(l=>l.name).join(" + ");const ln=++lineNo;
+      const clean=label.replace(/\b(discounts?|disc|dsc|promo|combos?|specials?|deals?|off)\b/gi," ").replace(/\s+/g," ").replace(/^[\s&+-]+|[\s&+-]+$/g,"").trim();
+      const cname=comboish&&words(clean).length>=2?clean.toLowerCase().replace(/(^|\s)([a-z])/g,(m,a,b)=>a+b.toUpperCase())+" combo":nm+" combo";
+      const units=[];for(let i=0;i<made;i++)units.push({id:nid(),name:cname,price:0,line:ln});
+      spread(units,T-dd);out.items.splice(Math.max(0,Math.min(at,out.items.length)),0,...units);out.itemDisc+=dd;
+      out.notes.push(`${cname!==nm+" combo"?`${cname}: combined ${nm}`:`Combined ${nm}`} using ${g.k>1?g.k+" × ":""}"${label}" (${money(dd)} off)${made>1?`, making ${made} combos at ${money(units[0].price)} each`:`: ${money(T-dd)}`}.`);
+      return;
+    }
+    let target=matched[0];let above=false;
+    if(!target&&g.adj){target=lines.find(l=>l.line===g.after);above=true}
+    if(!target){out.discount+=g.d;spreadNote(label,g.d);return}
+    const units=fix(target.line);const T=units.reduce((a,x)=>a+x.price,0);
+    const dd=Math.min(g.d,T);if(g.d>dd)out.discount+=g.d-dd;
+    spread(units,T-dd);out.itemDisc+=dd;
+    out.notes.push(`Applied ${g.k>1?g.k+" × ":""}"${label}" ${money(-dd)} to ${target.name}${above?" (the item above it)":""}${T-dd===0?", which makes it free":""}.`);
+  };
   const TIP=/\btips?\b|gratuity|\bgrat\b|auto[\s-]*grat|service\s*(charge|chg)|\bsvc\s*(charge|chg)?\b|\bsrv\s*chg/;
   const SUR=/surcharge|sur-charge|card\s*fee|credit\s*(card\s*)?fee|\bcc\s*fee|processing\s*fee|convenience\s*fee|non-?cash\s*(adj|fee|charge)/;
   let pending=null;
   for(let raw of text.split(/\r?\n/)){
-    let line=raw.replace(/\t/g," ").trim(); if(!line){pending=null;continue}
+    let line=raw.replace(/\t/g," ").replace(/ /g," ").trim(); if(!line){pending=null;lastItem=false;continue}
+    line=line.replace(/(\S)-\s+\$(?=\d)/,"$1 -$");
     if(pending&&onlyMoney.test(line))line=pending+" "+line;
     const m=line.match(moneyRe);
     if(!m){pending=line.length<=40?line:null;continue}
@@ -367,11 +421,17 @@ function parse(text){
     let name=line.slice(0,m.index).replace(/[\s.:$-]+$/,"").trim();
     const low=name.toLowerCase();
     if(/suggest|tip guide|tip calc/.test(low))continue;
-    if(/sub\s*-?total/.test(low)){out.subtotal=amt;continue}
+    if(/pre-?\s*discount|before\s+discount/.test(low)){out.preSub=amt;continue}
+    if(/sub\s*-?total/.test(low)){out.subtotal=amt;afterSub=true;continue}
     if(/\btax\b|\bhst\b|\bgst\b|\bvat\b/.test(low)){out.tax+=amt;continue}
     if(TIP.test(low)&&!/total/.test(low)){out.tip+=amt;continue}
     if(SUR.test(low)){out.surcharge+=amt;continue}
-    if(/discount|promo|coupon|\bcomp\b/.test(low)){out.discount+=Math.abs(amt);continue}
+    if(amt<0||DISC.test(low)&&!/\btotal\b/.test(low)||SUMMARY.test(low)){const d=Math.abs(amt);if(!d)continue;
+      const dn=name.replace(/^[-•*\s]+/,"").replace(/[\s-]+$/,"");
+      if(SUMMARY.test(dn.toLowerCase())&&pend.reduce((a,x)=>a+x.d,0)-summed>=d){summed+=d;continue}
+      if(afterSub||SUMMARY.test(dn.toLowerCase())){out.discount+=d;continue}
+      pend.push({name:dn,d,after:lineNo,adj:lastItem});
+      continue}
     if(/\btotal\b|balance|amount due|visa|mastercard|amex|discover|card|cash|change|paid|approved|auth/.test(low)){if(/total|amount due|balance/.test(low))out.total=amt;continue}
     if(!name) continue;
     let qty=1,unit=null;
@@ -382,11 +442,17 @@ function parse(text){
     const at=name.match(/^(.+?)\s*@\s*\$?(\d+\.\d{2})$/);
     if(at){name=at[1];unit=toC(at[2])}
     name=name.replace(/^[-•*\s]+/,"").trim(); if(!name) continue;
-    if(amt<0){out.discount+=Math.abs(amt);continue}
+    if(amt===0){const f=out.skipped.find(x=>x.name.toLowerCase()===name.toLowerCase());if(f)f.n+=Math.max(1,qty);else out.skipped.push({name,n:Math.max(1,qty)});continue}
     if(qty<1||qty>40) qty=1;
     const per=unit!=null?unit:Math.floor(amt/qty); let rem=amt-per*qty; if(unit!=null) rem=0;
-    for(let i=0;i<qty;i++) out.items.push({id:nid(),name,price:per+(i<rem?1:0),group:qty>1?name:null,n:i+1,of:qty});
+    const ln=++lineNo;lastItem=true;
+    for(let i=0;i<qty;i++) out.items.push({id:nid(),name,price:per+(i<rem?1:0),line:ln});
   }
+  const groupsD=[];pend.forEach(p=>{const g=groupsD.find(g=>g.name.toLowerCase()===p.name.toLowerCase()&&(g.after===p.after||!g.adj&&!p.adj));if(g){g.k++;g.d+=p.d}else groupsD.push({...p,k:1})});
+  groupsD.forEach(applyDisc);
+  out.items=out.items.filter(x=>{if(x.price>0)return true;const f=out.skipped.find(s=>s.name.toLowerCase()===x.name.toLowerCase());if(f)f.n++;else out.skipped.push({name:x.name,n:1});return false});
+  const byLine={};out.items.forEach(x=>(byLine[x.line]=byLine[x.line]||[]).push(x));
+  Object.values(byLine).forEach(g=>g.forEach((x,i)=>{x.n=i+1;x.of=g.length;x.group=g.length>1?x.name:null}));
   return out;
 }
 
@@ -471,9 +537,11 @@ function rReceipt(){
   }
   const p=S.parseCheck||{};
   const sub=subtotal();
-  const match=p.subtotal!=null?(p.subtotal===sub):null;
+  const match=p.subtotal!=null?[sub,sub+(p.itemDisc||0),sub-(p.discount||0)].includes(p.subtotal):null;
   app.innerHTML=`<h2>Check the items</h2>
   <p class="sub">Fix anything the reader got wrong. Every row is one tap-able unit.</p>
+  ${(p.notes||[]).length?`<div class="alert" style="margin:0 0 10px"><b>Discounts applied to items</b>${p.notes.map(n=>`<div style="margin-top:4px">${esc(n)}</div>`).join("")}<div style="margin-top:6px;color:var(--muted);font-size:.85rem">If one landed on the wrong item, fix the prices below.</div></div>`:""}
+  ${(p.skipped||[]).length?`<p class="sub" style="margin:0 0 10px">Skipped ${p.skipped.reduce((a,x)=>a+x.n,0)} free item${p.skipped.reduce((a,x)=>a+x.n,0)===1?"":"s"}: ${p.skipped.map(x=>esc(x.name)+(x.n>1?" ×"+x.n:"")).join(", ")}. If one of these actually cost something, add it with + Add item.</p>`:""}
   ${match===true?`<p class="ok" style="margin:0 0 10px">Items add up to the receipt subtotal.</p>`:match===false?`<p class="alert">Items total ${money(sub)} but the receipt says ${money(p.subtotal)}. Check for a missed line.</p>`:""}
   <div class="lines" id="lines">${S.items.map(i=>`
     <div class="line" data-id="${i.id}">
